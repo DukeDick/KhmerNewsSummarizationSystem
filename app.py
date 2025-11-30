@@ -8,18 +8,20 @@ st.set_page_config(page_title="Khmer News Summarizer", layout="wide")
 
 st.sidebar.title("Backend Settings")
 
-# ⬇️ Paste the ngrok URL printed by your FastAPI notebook, e.g.
-# "https://a31a00410145.ngrok-free.app/"
+# Your FastAPI / ngrok URL from Kaggle logs:
+# 🚀 API RUNNING AT: NgrokTunnel: "https://a31a00410145.ngrok-free.app" -> "http://localhost:8000"
 api_base = st.sidebar.text_input(
     "FastAPI / ngrok URL",
-    value="https://YOUR-NGROK-URL.ngrok-free.app",
+    value="https://a31a00410145.ngrok-free.app",
     help="Use the URL printed by the Kaggle notebook (without /summarize at the end).",
 )
 
 st.sidebar.markdown("---")
-st.sidebar.write("1. Run the Kaggle notebook (hosting-model)  
-2. Copy the printed ngrok URL  
-3. Paste it above and click *Summarize*")
+st.sidebar.write(
+    "1. Run the Kaggle notebook (hosting-model)\n"
+    "2. Copy the printed ngrok URL (already prefilled here)\n"
+    "3. Paste text and click *Summarize*"
+)
 
 # ==============================
 # 🌐 UI
@@ -47,16 +49,17 @@ summarize_clicked = st.button("✨ Summarize")
 # 🧠 Call Backend
 # ==============================
 if summarize_clicked:
-    if not api_base or api_base.startswith("https://YOUR-NGROK-URL"):
-        st.error("Please paste your real FastAPI ngrok URL in the sidebar first.")
+    if not api_base:
+        st.error("Please provide your FastAPI ngrok URL in the sidebar.")
     elif not input_text.strip():
         st.warning("Please paste some text to summarize.")
     else:
-        # Build endpoint
         endpoint = api_base.rstrip("/") + "/summarize"
 
         payload = {
             "text": input_text,
+            "max_tokens": max_tokens,
+            "temperature": float(temperature),
         }
 
         st.info(f"Sending request to: `{endpoint}`")
@@ -75,7 +78,7 @@ if summarize_clicked:
 
             except requests.exceptions.RequestException as e:
                 st.error(f"Request error: {e}")
-                if hasattr(e, "response") and e.response is not None:
+                if getattr(e, "response", None) is not None:
                     st.code(e.response.text, language="json")
             except Exception as e:
                 st.error(f"Unexpected error: {e}")

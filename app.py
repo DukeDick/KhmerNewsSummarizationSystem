@@ -1,8 +1,8 @@
 import os
 import requests
 import streamlit as st
-from bs4 import BeautifulSoup  # for URL text extraction
-import google.generativeai as genai  # Gemini
+from bs4 import BeautifulSoup  # pip install beautifulsoup4
+import google.generativeai as genai  # pip install google-generativeai
 
 
 # ==============================
@@ -50,7 +50,7 @@ gemini_api_key = st.sidebar.text_input(
 
 gemini_model_name = st.sidebar.text_input(
     "Gemini Model Name",
-    value="gemini-2.0-flash",  # good default; can change in UI
+    value="gemini-2.0-flash",  # or "gemini-flash-latest"
     help="For example: gemini-2.0-flash, gemini-flash-latest, gemini-2.0-pro",
 )
 
@@ -60,11 +60,22 @@ gemini_model_name = st.sidebar.text_input(
 # ==============================
 def extract_main_text_from_url(url: str) -> str:
     """
-    Very simple extractor: fetches the URL and joins all <p> tag texts.
-    Works okay for many news sites; you can improve later.
+    Fetches the URL and tries to extract the main article text.
+    Adds browser-like headers to avoid simple 403 blocks.
     """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,km;q=0.8",
+        "Connection": "keep-alive",
+    }
+
     try:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
     except Exception as e:
         st.error(f"Error fetching URL: {e}")
@@ -138,11 +149,15 @@ if fetch_clicked:
             article_text = extract_main_text_from_url(url)
             if not article_text:
                 st.error("Could not extract text from this URL.")
+                st.info(
+                    "This website may be blocking automated access. "
+                    "Please open the article in your browser and paste the text manually."
+                )
             else:
                 st.success("Extracted article text from URL.")
                 st.session_state.input_text = article_text
                 # Rerun to show text in textarea
-                st.experimental_rerun()
+                st.rerun()
 
 
 st.markdown("### ✍️ Option 2: Paste article text manually")

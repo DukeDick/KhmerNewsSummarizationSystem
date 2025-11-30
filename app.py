@@ -1,57 +1,151 @@
-import streamlit as st
+import os
 import requests
-import google.generativeai as genai  # pip install google-generativeai
+import streamlit as st
+from bs4 import BeautifulSoup  # for URL text extraction
+import google.generativeai as genai  # Gemini
+
 
 # ==============================
-# 🔧 STREAMLIT CONFIG
+# ⚙️ PAGE & SESSION SETUP
 # ==============================
 st.set_page_config(page_title="Khmer News Summarizer", layout="wide")
 
-# Keep summary in session so we can use it for Q&A
 if "summary" not in st.session_state:
     st.session_state.summary = ""
+if "input_text" not in st.session_state:
+    st.session_state.input_text = ""
+
 
 # ==============================
 # 🔧 SIDEBAR CONFIG
 # ==============================
 st.sidebar.title("Backend Settings")
 
-# 🔁 Your FastAPI / ngrok URL from Kaggle logs:
+# Your FastAPI / ngrok URL from Kaggle logs
 api_base = st.sidebar.text_input(
     "FastAPI / ngrok URL",
-    value="https://a31a00410145.ngrok-free.app",
+    value="https://a31a00410145.ngrok-free.app",  # change if needed
     help="Use the URL printed by the Kaggle notebook (without /summarize at the end).",
 )
 
 st.sidebar.markdown("---")
 st.sidebar.write(
     "1. Run the Kaggle notebook (hosting-model)\n"
-    "2. Copy the printed ngrok URL (already prefilled here)\n"
-    "3. Paste text and click *Summarize*"
+    "2. Copy the printed ngrok URL\n"
+    "3. Paste here and click *Summarize*"
 )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Gemini Settings")
 
-# 👉 Gemini API key (from Google AI Studio)
+# Prefer GEMINI_API_KEY from Streamlit secrets, allow override via sidebar
+default_gemini_key = st.secrets.get("GEMINI_API_KEY", "")
+
 gemini_api_key = st.sidebar.text_input(
     "Gemini API Key",
     type="password",
-    help="Get this from Google AI Studio and paste it here.",
+    value=default_gemini_key,
+    help="Best: set GEMINI_API_KEY in Streamlit Secrets, or paste it here.",
 )
 
-# Allow changing model if you want
 gemini_model_name = st.sidebar.text_input(
     "Gemini Model Name",
-    value="gemini-1.5-flash",
-    help="e.g. gemini-1.5-flash, gemini-1.5-pro, etc.",
+    value="gemini-2.0-flash",  # good default; can change in UI
+    help="For example: gemini-2.0-flash, gemini-flash-latest, gemini-2.0-pro",
 )
 
+
 # ==============================
-# 🌐 UI
+# 🔎 HELPERS
+# ==============================
+def extract_main_text_from_url(url: str) -> str:
+    """
+    Very simple extractor: fetches the URL and joins all <p> tag texts.
+    Works okay for many news sites; you can improve later.
+    """
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        st.error(f"Error fetching URL: {e}")
+        return ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")]
+
+    # Filter out super-short bits and join
+    text = "\n".join(p for p in paragraphs if len(p) > 40)
+
+    return text
+
+
+def ask_gemini_about_summary(
+    api_key: str,
+    model_name: str,
+    summary: str,
+    question: str,
+) -> str:
+    """
+    Use Gemini to answer a question based on the given summary.
+    """
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+
+    prompt = f"""
+You are a helpful assistant answering questions about the following Khmer news summary.
+
+SUMMARY:
+{summary}
+
+USER QUESTION:
+{question}
+
+Please answer in Khmer and keep the answer short, clear, and directly related to the summary above.
+If the summary doesn't contain enough information to answer, say that you don't know based on this summary.
+"""
+
+    response = model.generate_content(prompt)
+    if not response or not getattr(response, "text", ""):
+        return "មិនអាចឆ្លើយបានពីសង្ខេបនេះទេ។"
+
+    return response.text.strip()
+
+
+# ==============================
+# 🌐 MAIN UI
 # ==============================
 st.title("📰 Khmer News Summarizer")
-st.write("Paste a Khmer news article or long text below and get a concise summary in Khmer.")
+st.write(
+    "Paste a Khmer news article, or a link to it, and get a concise Khmer summary. "
+    "Then ask questions about that summary using Gemini."
+)
+
+# ------ URL fetch section ------
+st.markdown("### 🔗 Option 1: Paste a news article URL")
+
+url = st.text_input(
+    "Article URL (optional)",
+    placeholder="https://www.example.com/news/article...",
+)
+
+fetch_clicked = st.button("📥 Fetch text from URL")
+
+if fetch_clicked:
+    if not url.strip():
+        st.warning("Please paste a URL first.")
+    else:
+        with st.spinner("Fetching and extracting article text from URL..."):
+            article_text = extract_main_text_from_url(url)
+            if not article_text:
+                st.error("Could not extract text from this URL.")
+            else:
+                st.success("Extracted article text from URL.")
+                st.session_state.input_text = article_text
+                # Rerun to show text in textarea
+                st.experimental_rerun()
+
+
+st.markdown("### ✍️ Option 2: Paste article text manually")
 
 col1, col2 = st.columns([2, 1])
 
@@ -60,14 +154,16 @@ with col1:
         "Input Text (Khmer)",
         height=320,
         placeholder="Paste your Khmer article or paragraph here...",
+        value=st.session_state.input_text,
     )
 
 with col2:
-    st.markdown("### Options")
+    st.markdown("#### Options")
     max_tokens = st.slider("Max summary tokens (approx.)", 64, 512, 256, step=32)
     temperature = st.slider("Creativity (temperature)", 0.1, 1.0, 0.5, step=0.1)
 
 summarize_clicked = st.button("✨ Summarize")
+
 
 # ==============================
 # 🧠 CALL BACKEND (SUMMARIZER)
@@ -76,7 +172,7 @@ if summarize_clicked:
     if not api_base:
         st.error("Please provide your FastAPI ngrok URL in the sidebar.")
     elif not input_text.strip():
-        st.warning("Please paste some text to summarize.")
+        st.warning("Please paste some text or fetch from URL first.")
     else:
         endpoint = api_base.rstrip("/") + "/summarize"
 
@@ -97,57 +193,31 @@ if summarize_clicked:
                 if not summary:
                     st.error("Backend returned an empty summary.")
                 else:
-                    st.session_state.summary = summary  # 🔥 save for Gemini Q&A
+                    st.session_state.summary = summary
                     st.subheader("📌 Summary (Khmer)")
                     st.write(summary)
 
             except requests.exceptions.RequestException as e:
                 st.error(f"Request error: {e}")
                 if getattr(e, "response", None) is not None:
-                    st.code(e.response.text, language="json")
+                    try:
+                        st.code(e.response.text, language="json")
+                    except Exception:
+                        st.code(str(e.response.text))
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
 
+
 # ==============================
-# 🤖 GEMINI Q&A ABOUT SUMMARY
+# 💬 GEMINI Q&A ABOUT SUMMARY
 # ==============================
-def ask_gemini_about_summary(
-    api_key: str,
-    model_name: str,
-    summary: str,
-    question: str,
-) -> str:
-    """
-    Use Gemini to answer a question based on the given summary.
-    """
-    genai.configure(api_key=api_key)
-    model = google_model = genai.GenerativeModel(model_name)
-
-    prompt = f"""
-You are a helpful assistant answering questions about the following Khmer news summary.
-
-SUMMARY:
-{summary}
-
-USER QUESTION:
-{question}
-
-Please answer **in Khmer** and keep the answer short, clear, and directly related to the summary above.
-If the summary doesn't contain enough information to answer, say that you don't know based on this summary.
-"""
-
-    response = model.generate_content(prompt)
-    return response.text.strip() if response and response.text else "មិនអាចឆ្លើយបានពីសង្ខេបនេះទេ។"
-
-
-# Only show Q&A section if we already have a summary
 if st.session_state.summary:
     st.markdown("---")
-    st.markdown("### 💬 Ask about this summary (Gemini-powered)")
+    st.markdown("### 💬 Ask Gemini about this summary")
 
     st.info(
-        "You can now ask questions about the summary above. "
-        "Gemini will answer based **only** on that summary."
+        "Type any question about the summary above. "
+        "Gemini will answer based only on that summary."
     )
 
     question = st.text_input(
@@ -156,11 +226,11 @@ if st.session_state.summary:
         key="qa_question",
     )
 
-    ask_clicked = st.button("💬 Ask Gemini about this summary")
+    ask_clicked = st.button("💬 Ask Gemini")
 
     if ask_clicked:
         if not gemini_api_key:
-            st.error("Please enter your Gemini API key in the sidebar first.")
+            st.error("Please set your Gemini API key (Streamlit Secrets or sidebar).")
         elif not question.strip():
             st.warning("Please type a question first.")
         else:

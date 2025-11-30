@@ -90,34 +90,33 @@ def extract_main_text_from_url(url: str) -> str:
     return text
 
 
-def ask_gemini_about_summary(
-    api_key: str,
-    model_name: str,
-    summary: str,
-    question: str,
-) -> str:
+def ask_gemini_any_context(api_key: str, model_name: str, context: str, question: str) -> str:
     """
-    Use Gemini to answer a question based on the given summary.
+    Use Gemini to answer a question based on arbitrary context
+    (summary, original, or both).
     """
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
 
     prompt = f"""
-You are a helpful assistant answering questions about the following Khmer news summary.
+You are a helpful assistant answering questions using the context below.
 
-SUMMARY:
-{summary}
+CONTEXT:
+{context}
 
 USER QUESTION:
 {question}
 
-Please answer in Khmer and keep the answer short, clear, and directly related to the summary above.
-If the summary doesn't contain enough information to answer, say that you don't know based on this summary.
+Rules:
+- Answer in Khmer.
+- Base your answer ONLY on the context provided.
+- If the context doesn't contain enough information, say that you don't know
+  based on this context.
 """
 
     response = model.generate_content(prompt)
     if not response or not getattr(response, "text", ""):
-        return "មិនអាចឆ្លើយបានពីសង្ខេបនេះទេ។"
+        return "មិនអាចឆ្លើយបានពីបរិបទនេះទេ។"
 
     return response.text.strip()
 
@@ -128,7 +127,7 @@ If the summary doesn't contain enough information to answer, say that you don't 
 st.title("📰 Khmer News Summarizer")
 st.write(
     "Paste a Khmer news article, or a link to it, and get a concise Khmer summary. "
-    "Then ask questions about that summary using Gemini."
+    "Then ask questions about that summary using Gemini, with flexible context options."
 )
 
 # ------ URL fetch section ------
@@ -209,6 +208,7 @@ if summarize_clicked:
                     st.error("Backend returned an empty summary.")
                 else:
                     st.session_state.summary = summary
+                    st.session_state.input_text = input_text  # keep latest original
                     st.subheader("📌 Summary (Khmer)")
                     st.write(summary)
 
@@ -224,16 +224,28 @@ if summarize_clicked:
 
 
 # ==============================
-# 💬 GEMINI Q&A ABOUT SUMMARY
+# 💬 GEMINI Q&A ABOUT SUMMARY / ORIGINAL
 # ==============================
 if st.session_state.summary:
     st.markdown("---")
-    st.markdown("### 💬 Ask Gemini about this summary")
+    st.markdown("### 💬 Ask Gemini about this content")
 
-    st.info(
-        "Type any question about the summary above. "
-        "Gemini will answer based only on that summary."
+    # Context mode selector
+    context_mode = st.radio(
+        "Choose context for Gemini:",
+        [
+            "Summary Only",
+            "Summary + Original Article",
+            "Original Article Only",
+        ],
     )
+
+    if context_mode == "Summary Only":
+        st.info("Gemini will answer based only on the summary above.")
+    elif context_mode == "Summary + Original Article":
+        st.info("Gemini will use both the summary and original article for best accuracy.")
+    else:  # Original Article Only
+        st.info("Gemini will answer directly from the original article text.")
 
     question = st.text_input(
         "Your question (in Khmer or English)",
@@ -249,12 +261,39 @@ if st.session_state.summary:
         elif not question.strip():
             st.warning("Please type a question first.")
         else:
-            with st.spinner("Asking Gemini about your summary..."):
+            # Build context based on selected mode
+            if context_mode == "Summary Only":
+                context_text = f"SUMMARY:\n{st.session_state.summary}"
+
+            elif context_mode == "Summary + Original Article":
+                if not st.session_state.input_text.strip():
+                    st.warning(
+                        "No original article text available. "
+                        "Using summary only instead."
+                    )
+                    context_text = f"SUMMARY:\n{st.session_state.summary}"
+                else:
+                    context_text = (
+                        f"SUMMARY:\n{st.session_state.summary}\n\n"
+                        f"ORIGINAL ARTICLE:\n{st.session_state.input_text}"
+                    )
+
+            else:  # Original Article Only
+                if not st.session_state.input_text.strip():
+                    st.warning(
+                        "No original article text available. "
+                        "Using summary only instead."
+                    )
+                    context_text = f"SUMMARY:\n{st.session_state.summary}"
+                else:
+                    context_text = f"ORIGINAL ARTICLE:\n{st.session_state.input_text}"
+
+            with st.spinner("Asking Gemini about the selected context..."):
                 try:
-                    answer = ask_gemini_about_summary(
+                    answer = ask_gemini_any_context(
                         api_key=gemini_api_key,
                         model_name=gemini_model_name,
-                        summary=st.session_state.summary,
+                        context=context_text,
                         question=question,
                     )
                     st.subheader("🧠 Gemini's Answer")
